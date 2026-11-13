@@ -3,9 +3,11 @@ package net.de5.rainbowcrrsys.folio;
 import net.de5.rainbowcrrsys.gcprimitives.V020;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.Locale;
 import java.util.Map;
 
@@ -50,9 +52,53 @@ public final class ServerConfig {
     public static ServerConfig load() {
         String explicit = System.getenv(V020.CONFIG_ENV);
         Path path = Paths.get(explicit != null && !explicit.isBlank() ? explicit : "config.yaml");
+        writeDefaultIfMissing(path);
         ServerConfig cfg = new ServerConfig(path);
         cfg.reload();
         return cfg;
+    }
+
+    /** A downloaded jar with no config.yaml still starts with sane, editable defaults. */
+    private static void writeDefaultIfMissing(Path path) {
+        if (Files.exists(path)) return;
+        String text = "# folio runtime configuration. Generated on first accepted start.\n"
+                + "# Parsed with the gc-primitives 0.2.0 YAML subset.\n"
+                + "# GC_PRIMITIVES_CONFIG overrides this path; server keys also accept FOLIO_<KEY>.\n"
+                + "\n"
+                + "server:\n"
+                + "  host: 0.0.0.0\n"
+                + "  port: 25565\n"
+                + "  motd: \"A 26.x protocol core\"\n"
+                + "  online-mode: true\n"
+                + "  session-url: \"https://sessionserver.mojang.com/session/minecraft/hasJoined\"\n"
+                + "  max-frame-size: 2097152\n"
+                + "  max-connections: 256\n"
+                + "  keep-alive-interval-ms: 15000\n"
+                + "  keep-alive-timeout-ms: 30000\n"
+                + "  selector-threads: 1\n"
+                + "\n"
+                + "pools:\n"
+                + "  frames:\n"
+                + "    max_size: 64\n"
+                + "    on_full: drop_oldest\n"
+                + "    leak_detection: true\n"
+                + "    leak_timeout_ms: 3000\n"
+                + "    prewarm: 8\n"
+                + "  messages:\n"
+                + "    max_size: 64\n"
+                + "    on_full: drop_oldest\n"
+                + "    leak_detection: true\n"
+                + "    leak_timeout_ms: 3000\n"
+                + "    prewarm: 8\n";
+        try {
+            Files.writeString(path, text, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            System.getLogger("folio.config").log(System.Logger.Level.INFO,
+                    "config.yaml written with defaults next to the jar");
+        } catch (IOException e) {
+            System.getLogger("folio.config").log(System.Logger.Level.WARNING,
+                    "config.yaml could not be written; using built-in defaults", e);
+        }
     }
 
     public Path path() {

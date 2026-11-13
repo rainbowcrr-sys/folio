@@ -1,9 +1,10 @@
-# folio — design (first milestone)
+# folio — design
 
 Status: design for the delivered core. Repository content is English; the only non-ASCII
 user-facing string in the protocol is the deliberately bilingual version-gate disconnect
 message. Two license filenames are non-ASCII (`许可.txt`) by explicit request; their text
-is the English Apache-2.0 license.
+is the English Apache-2.0 license. `eula.txt` and its content are plain ASCII, matching the
+official server's format.
 
 ## 1. Scope
 
@@ -25,7 +26,9 @@ In scope:
 - Keep-Alive (15 s send / 30 s timeout)
 - Full gc-primitives 0.2.0 integration
 - Apache-2.0 license text in the repo and inside the shaded jar
-- GitHub Actions matrix CI with protocol-level integration tests
+- Vanilla-style two-start EULA gate (`eula.txt`, `eula=false` -> `true`)
+- Auto-generated `config.yaml` on the first accepted start, so a bare jar runs as-is
+- GitHub Actions matrix CI, a two-start startup job, and a downloadable shaded jar artifact
 
 Out of scope: terrain generation, entities, inventory, chat commands, redstone, plugin API,
 resource packs, full registry NBT inline data, and 26.4.
@@ -233,8 +236,34 @@ zero-dependency reader in `Registries`. Export it from the official server jar w
 `java -DbundlerMainClass=net.minecraft.data.Main -jar server.jar --reports`. This is the
 supported path to a full vanilla registry view.
 
-On first start `License.ensure()` writes `许可.txt` from the `/LICENSE.txt` resource bundled
-inside the shaded jar. There is no EULA acceptance flow.
+### 7.1 Startup files and the EULA gate
+
+`Folio.main` runs in this order:
+
+```
+License.ensure()   -> writes 许可.txt from /LICENSE.txt inside the jar (if missing)
+Eula.ensure()      -> writes eula.txt (eula=false) and returns false on the first start
+                      -> false: log guidance and return, no socket, no config, no logs/
+ServerConfig.load()-> writes config.yaml with defaults (if missing), then parses it
+GcRuntime.start()  -> schedules logs/metrics.json at +30 s, every 30 s, overwrite
+NioServer.start()  -> binds the port, logs "folio listening on port ..."
+```
+
+Files written by the server itself, by phase:
+
+| Phase | File | Behaviour |
+| --- | --- | --- |
+| First start | `许可.txt` | Apache-2.0 text, only if absent |
+| First start | `eula.txt` | `eula=false`, only if absent; never overwritten |
+| Accepted start | `config.yaml` | defaults, only if absent |
+| Accepted start, +30 s | `logs/metrics.json` | overwritten every 30 s |
+
+No `world/`, `dimensions/`, `server.properties`, player/ban/whitelist JSON, or
+`logs/latest.log` is ever written. `registries.json` is optional input, never output.
+
+`Eula.accepted` skips comments and blank lines, tolerates a UTF-8 BOM, case, and spaces
+around `=`, and refuses on any missing or non-`true` value. The gate applies to the
+Minecraft EULA; folio's own source license remains Apache-2.0.
 
 ## 8. Disconnect and keep-alive
 
@@ -255,16 +284,20 @@ executable jar. Dependencies: gc-primitives 0.2.0 (runtime), JUnit Jupiter 5.10.
 - Matrix: protocol version `26.1 / 26.2 / 26.3` x JDK `25 / 26`
 - Steps: checkout, `actions/setup-java`, `mvn -B verify -Dfolio.protocol.version=...`
 - Integration tests cover offline and online (mock session server) for each matrix cell,
-  the full five-state walk, and a keep-alive hold window
+  the full five-state walk, the EULA gate unit tests, and a keep-alive hold window
+- A `startup` job packages the shaded jar, runs it in a clean directory twice (first start
+  must leave only `许可.txt` + `eula.txt` and bind no port; second start must generate
+  `config.yaml` and log the listening line), and uploads `folio.jar` as the `folio-jar`
+  artifact so a runnable binary is available without a local Maven build
 - No token is stored in the repository or workflow; the runner's automatic token is used
 
 Note on local verification: the authoring sandbox has Java 11 and no Maven/JDK 25, so the
 JDK 25 `mvn verify` is verified by the GitHub Actions matrix (the agreed "build and test on
 GitHub, free tier" path). Locally, all main and test sources are compiled with the JDK 11
 compiler module against the real gc-primitives 0.2.0 sources, followed by an end-to-end
-smoke run of the full state machine, and a `java -cp ... Folio` startup plus Status ping
-(equivalent to `java -jar` on the shaded artifact). That startup also confirms the
-`许可.txt` first-run write.
+smoke run of the full state machine, and a two-start `java -cp ... Folio` check plus Status
+ping (equivalent to `java -jar` on the shaded artifact). That check confirms the EULA gate,
+the `许可.txt` and `config.yaml` writes, and the 30 s `logs/metrics.json` write.
 
 ## 10. Repository layout and commit plan
 
@@ -283,11 +316,12 @@ src/main/java/net/de5/rainbowcrrsys/folio/...
 src/test/java/net/de5/rainbowcrrsys/folio/...
 ```
 
-Commits: `docs: add design`, `feat: minimal 26.x protocol core`, and
-`feat: complete configuration and join sequence` for this final pass. All English
-Conventional-style messages. No credential, token, or key material appears in any
-committed file, in git history, or in CI configuration.
+Commits: `docs: add design`, `feat: minimal 26.x protocol core`,
+`feat: complete configuration and join sequence`, and
+`feat: vanilla-style EULA gate and first-run config`. All English Conventional-style
+messages. No credential, token, or key material appears in any committed file, in git
+history, or in CI configuration.
 
-Start-up is verified locally with `java -cp ... net.de5.rainbowcrrsys.folio.Folio` plus a
-Status ping (equivalent to `java -jar` on the shaded artifact); the JDK 25 Maven build
-itself is verified by the GitHub Actions matrix.
+Both startup phases are verified locally with `java -cp ... Folio` plus a Status ping
+(equivalent to `java -jar` on the shaded artifact); the JDK 25 Maven build itself is
+verified by the GitHub Actions matrix, including the two-start startup job.

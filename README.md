@@ -58,16 +58,37 @@ mvn -B package
 java -jar target/folio-0.1.0-SNAPSHOT.jar
 ```
 
-This is a shaded executable jar, so `java -jar` is the whole startup path. On first start it
-writes `许可.txt` (the Apache-2.0 text) next to the working directory; the same text is
-bundled inside the jar and committed at the repository root. There is no EULA acceptance
-step.
+A prebuilt shaded jar (`folio.jar`) is also attached to every successful CI run as the
+`folio-jar` artifact, so you can download and run it without Maven.
 
-`config.yaml` sits next to the jar. Defaults: port `25565`, MOTD `A 26.x protocol core`,
-`online-mode: true`. For a local smoke test set `online-mode: false` so no Mojang session
-lookup is attempted. `GC_PRIMITIVES_CONFIG` overrides the config path; pool settings and
-server settings are hot-reloaded, and a changed `online-mode` applies to **new connections
-only**.
+**The first start is an EULA gate, exactly like the official server.** It writes two files
+and exits without binding a port:
+
+```
+# run 1
+java -jar folio.jar
+#   -> 许可.txt   (Apache-2.0 text, bundled inside the jar)
+#   -> eula.txt   (default: eula=false)
+#   -> prints "Edit eula.txt to eula=true, then start folio again."
+```
+
+Edit `eula.txt` to `eula=true`, then start again. Only the accepted start generates
+`config.yaml` (if missing), binds the port, and — 30 seconds later — writes
+`logs/metrics.json` (overwritten every 30 s, never accumulating).
+
+```sh
+sed -i 's/^eula=false/eula=true/' eula.txt   # or just edit the file
+java -jar folio.jar
+```
+
+Nothing else is written: no `world/`, no `server.properties`, no player or ban lists, no
+`latest.log`, and no other acceptance files.
+
+`config.yaml` is generated with defaults on the first accepted start: port `25565`, MOTD
+`A 26.x protocol core`, `online-mode: true`. For a local smoke test set
+`online-mode: false` so no Mojang session lookup is attempted.
+`GC_PRIMITIVES_CONFIG` overrides the config path; pool settings and server settings are
+hot-reloaded, and a changed `online-mode` applies to **new connections only**.
 
 ## Registries and real clients
 
@@ -141,4 +162,5 @@ credentials are stored in the repository or in CI configuration.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE), [LICENSE.txt](LICENSE.txt) and
-[许可.txt](许可.txt).
+[许可.txt](许可.txt). The EULA gate applies to the Minecraft EULA, not to this project's
+source license; folio itself stays Apache-2.0.

@@ -29,3 +29,54 @@ jobs:
         with:
           name: reports-${{ matrix.protocol }}-jdk${{ matrix.java }}
           path: target/surefire-reports/
+
+  startup:
+    runs-on: ubuntu-latest
+    name: first-run EULA gate / runnable jar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Package shaded jar
+        run: mvn -B -q package -DskipTests
+      - name: First start stops at the EULA gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          cp target/folio-0.1.0-SNAPSHOT.jar smoke/folio.jar
+          cd smoke
+          java -jar folio.jar > first.log 2>&1
+          test -f eula.txt
+          test -f "许可.txt"
+          grep -q '^eula=false' eula.txt
+          ! grep -q 'folio listening on port' first.log
+          ! test -f config.yaml
+          ! test -d logs
+          echo "first start: eula.txt + license only, no port bound"
+      - name: Second start listens
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd smoke
+          sed -i 's/^eula=false/eula=true/' eula.txt
+          java -jar folio.jar > second.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 40); do
+            grep -q 'folio listening on port' second.log && break
+            sleep 0.5
+          done
+          grep -q 'folio listening on port' second.log
+          test -f config.yaml
+          kill "$pid" || true
+          wait "$pid" 2>/dev/null || true
+          echo "second start: config.yaml generated and server listening"
+      - name: Upload runnable jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: folio-jar
+          path: smoke/folio.jar
+          if-no-files-found: error
