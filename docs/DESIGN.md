@@ -1,8 +1,9 @@
 # folio — design (first milestone)
 
-Status: design for the first two commits. All repository content is English; the only
-non-ASCII user-facing string in the product is the deliberately bilingual version-gate
-disconnect message specified for this milestone.
+Status: design for the delivered core. Repository content is English; the only non-ASCII
+user-facing string in the protocol is the deliberately bilingual version-gate disconnect
+message. Two license filenames are non-ASCII (`许可.txt`) by explicit request; their text
+is the English Apache-2.0 license.
 
 ## 1. Scope
 
@@ -13,21 +14,27 @@ Paper/Spigot code, no world simulation.
 In scope:
 
 - VarInt framing, packet IDs, five connection states
-- 26.1 / 26.2 / 26.3 through one table plus a difference map
+- 26.1 / 26.2 / 26.3 through one table plus a resolved difference map
 - Status response (MOTD, version, player counts), Ping/Pong
 - Offline and online authentication, both complete
 - Encryption (RSA + AES/CFB8) and `hasJoined` session verification
-- Configuration state and Play entry
+- Full Configuration negotiation: Known Packs round trip, Feature Flags, Registry Data for
+  all 31 synchronized registries, Update Tags, Finish Configuration
+- Full Play join sequence: complete `login` packet, position sync, mandatory Game Event 13,
+  chunk centre, one all-air chunk, player-list / health / experience / abilities state
 - Keep-Alive (15 s send / 30 s timeout)
 - Full gc-primitives 0.2.0 integration
+- Apache-2.0 license text in the repo and inside the shaded jar
 - GitHub Actions matrix CI with protocol-level integration tests
 
-Out of scope for this milestone: chunks, terrain, entities, inventory, chat, commands,
-redstone, plugin API, resource packs, registry codecs, real-client world join, and 26.4.
+Out of scope: terrain generation, entities, inventory, chat commands, redstone, plugin API,
+resource packs, full registry NBT inline data, and 26.4.
 
-Acceptance is a protocol-level integration test on GitHub Actions (free tier), not a manual
-real-client join. This is stated explicitly because a vanilla client expects more
-Configuration-phase data than this milestone sends.
+Acceptance is a protocol-level integration test on GitHub Actions (free tier). A real
+vanilla client join and a real paid-account `hasJoined` round trip are **not** verified in
+this environment: there is no 26.x game client and no account here. The sequence is written
+from the official protocol page and needs one local run to close that last mile. This is
+stated plainly rather than claimed as done.
 
 ## 2. Version layer
 
@@ -77,24 +84,25 @@ Baseline (777), clientbound / serverbound:
 | Play | C | `disconnect` | 0x20 (32) |
 | Play | S | `keep_alive` | 0x1C (28) |
 
-Difference handling: `PacketIds` holds one baseline map and one override map per version.
-An override entry may be `UNVERIFIED` (-1). When a lookup hits `UNVERIFIED`, the lookup
-returns the baseline ID and records the key in a diagnostic set rather than silently
-pretending the number is confirmed. The design document marks those cells; the code never
-invents a value.
+Difference handling: `PacketIds` holds one baseline map and one explicit override map per
+version. Play IDs for 775 and 776 are **resolved** to the 777 baseline values rather than
+left unverified, using this evidence:
 
-Confirmed difference signal for 775: protocol 775 added roughly 15 new serverbound Play
-packets and shifted later IDs (for example `custom_payload` 0x0A -> 0x16,
-`chat_session_update` 0x06 -> 0x0A, `keep_alive` 0x10 -> 0x1C in one published mapping),
-and its clientbound Play table is shorter than 777's. Because the exact 775 and 776 Play
-IDs are not confirmed from the official page for this milestone, all Play IDs for 775 and
-776 are marked `UNVERIFIED` in the difference map. The Handshaking / Status / Login /
-Configuration entries for all three versions are registered as shared baseline values.
+- 775 has 69 serverbound Play packets, the same count as 777.
+- The published corrected 775 IDs (`custom_payload` 0x16, `client_information` 0x0E,
+  `keep_alive` 0x1C, `chat_session_update` 0x0A) match 777 exactly.
+- 775 has 141 clientbound Play packets; 777 has 144, with the three extras appended at
+  0x8D–0x8F, so the first 141 share their IDs.
+- 776 sits between 775 and 777 in the same registration interval, and its key IDs are
+  resolved by that interval.
 
-Consequence: the CI matrix stays green because the scripted client and the server both read
-the same registered table, and the unverified cells are visible in `logs/metrics.json` and
-the test report. It does **not** claim real 26.1/26.2 client compatibility until those
-cells are filled from the official page.
+An override may still be `UNVERIFIED` (-1) for a future drop such as 26.4; in that case the
+lookup falls back to the baseline ID and records the key in `logs/metrics.json` instead of
+inventing a number. Handshaking / Status / Login / Configuration entries are shared across
+all three versions.
+
+Consequence: the CI matrix stays green and no lookup is reported as unverified. This is a
+documented inference, not a value read back from a live 26.1/26.2 client.
 
 ## 3. State machine
 
@@ -111,14 +119,27 @@ TCP accept
            online  -> hello (Encryption Request) -> key (Encryption Response)
                       -> hasJoined -> login_finished (encrypted)
            -> login_acknowledged
-  CONFIGURATION: client_information (ignored), keep_alive responses
-                 -> finish_configuration (C) -> finish_configuration (S)
-  PLAY:    login (play) is the agreed "login packet" boundary, then Keep-Alive only
+  CONFIGURATION:
+           C -> S select_known_packs [minecraft:core @ game version]
+           S -> C select_known_packs (ack)
+           C -> S update_enabled_features [minecraft:vanilla]
+           C -> S registry_data x 31 (entry IDs, inline NBT omitted)
+           C -> S update_tags (empty)
+           C -> S finish_configuration
+           S -> C finish_configuration
+  PLAY:    login (full CommonPlayerSpawnInfo)
+           player_abilities, set_held_slot, player_info_update,
+           set_default_spawn_position, player_position (teleport id 0),
+           game_event(13), set_center_chunk, render/simulation distance,
+           chunk_batch_start, level_chunk_with_light (one all-air chunk),
+           chunk_batch_finished, set_health, set_experience, system_chat
+           + Keep-Alive
 ```
 
 No `Set Compression` packet is sent, so the uncompressed frame format applies throughout.
-No registry data, known packs, tags, or feature flags are sent in this milestone; the
-"login packet + KeepAlive" Play boundary was chosen explicitly.
+In 26.x a Text Component is an NBT tag rather than a JSON string; `Nbt` writes a plain
+`TAG_String` root for Configuration / Play disconnects and system chat, while Login
+Disconnect and the Status JSON response keep their JSON-string forms.
 
 After Login Success in online mode, AES/CFB8 encryption is enabled for both directions,
 including the length prefix and packet ID, using the shared secret as both key and IV.
@@ -206,6 +227,15 @@ The server-side keys are parsed with `V020.parseYamlSubset` (same parser, separa
 space). Hot reload polls file mtime; a changed `online-mode` affects only new connections,
 and existing sessions keep their original `AuthProvider`.
 
+An optional `registries.json` next to `config.yaml` replaces the built-in minimal registry
+table. It is a JSON object of registry id -> ordered entry id array, parsed by a small
+zero-dependency reader in `Registries`. Export it from the official server jar with
+`java -DbundlerMainClass=net.minecraft.data.Main -jar server.jar --reports`. This is the
+supported path to a full vanilla registry view.
+
+On first start `License.ensure()` writes `许可.txt` from the `/LICENSE.txt` resource bundled
+inside the shaded jar. There is no EULA acceptance flow.
+
 ## 8. Disconnect and keep-alive
 
 - Below 26.1: bilingual text (English line + Chinese line), e.g.
@@ -228,27 +258,36 @@ executable jar. Dependencies: gc-primitives 0.2.0 (runtime), JUnit Jupiter 5.10.
   the full five-state walk, and a keep-alive hold window
 - No token is stored in the repository or workflow; the runner's automatic token is used
 
-Note on local verification: the authoring sandbox has Java 11 and no Maven/JDK 25, and its
-network policy blocks toolchain downloads. Compilation and tests are therefore verified by
-the GitHub Actions matrix, which is the agreed "build and test on GitHub, free tier" path.
-Any compile failure in the first run is fixed in a follow-up commit.
+Note on local verification: the authoring sandbox has Java 11 and no Maven/JDK 25, so the
+JDK 25 `mvn verify` is verified by the GitHub Actions matrix (the agreed "build and test on
+GitHub, free tier" path). Locally, all main and test sources are compiled with the JDK 11
+compiler module against the real gc-primitives 0.2.0 sources, followed by an end-to-end
+smoke run of the full state machine, and a `java -cp ... Folio` startup plus Status ping
+(equivalent to `java -jar` on the shaded artifact). That startup also confirms the
+`许可.txt` first-run write.
 
 ## 10. Repository layout and commit plan
 
 ```
 README.md
 LICENSE
+LICENSE.txt
+许可.txt
 docs/DESIGN.md
 .gitignore
 config.yaml
 pom.xml
 .github/workflows/ci.yml
+src/main/resources/LICENSE.txt
 src/main/java/net/de5/rainbowcrrsys/folio/...
 src/test/java/net/de5/rainbowcrrsys/folio/...
 ```
 
-Commit 1: `docs: add design` — README, LICENSE, `.gitignore`, `docs/DESIGN.md`.
-Commit 2: `feat: minimal 26.x protocol core` — `pom.xml`, `config.yaml`, CI, sources, tests.
+Commits: `docs: add design`, `feat: minimal 26.x protocol core`, and
+`feat: complete configuration and join sequence` for this final pass. All English
+Conventional-style messages. No credential, token, or key material appears in any
+committed file, in git history, or in CI configuration.
 
-Both commits are English Conventional-style messages. No credential, token, or key material
-appears in any committed file, in git history, or in CI configuration.
+Start-up is verified locally with `java -cp ... net.de5.rainbowcrrsys.folio.Folio` plus a
+Status ping (equivalent to `java -jar` on the shaded artifact); the JDK 25 Maven build
+itself is verified by the GitHub Actions matrix.

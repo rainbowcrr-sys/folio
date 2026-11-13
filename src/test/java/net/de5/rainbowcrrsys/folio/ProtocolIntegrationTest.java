@@ -20,11 +20,11 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Protocol-level acceptance: a scripted client walks all five states for every supported
- * drop, in both authentication modes, and survives a keep-alive window.
+ * drop, in both authentication modes, completes the Configuration registry negotiation,
+ * receives the full Play join sequence, and survives a keep-alive window.
  *
- * <p>The client and server both read the same registered packet table, so unverified 775/776
- * Play cells stay self-consistent. This does not claim vanilla-client compatibility; see
- * docs/DESIGN.md.
+ * <p>The client and server both read the same registered packet table. This verifies the
+ * protocol core, not a vanilla client rendering a world; see docs/DESIGN.md.
  */
 class ProtocolIntegrationTest {
 
@@ -135,34 +135,74 @@ class ProtocolIntegrationTest {
                 b.writeByteArray(encryptedSecret);
                 b.writeByteArray(encryptedToken);
             });
-            javax.crypto.Cipher[] ciphers = TestClient.clientCiphers(sharedSecret);
+            Cipher[] ciphers = TestClient.clientCiphers(sharedSecret);
             client.enableEncryption(ciphers[0], ciphers[1]);
         }
 
         TestClient.Frame finished = client.readFrame();
         assertEquals(PacketIds.id(version, PacketIds.LOGIN_C_FINISHED), finished.id);
 
+        // Configuration: Known Packs round trip, Registry Data, Update Tags, Finish.
         client.send(PacketIds.LOGIN_S_ACK, b -> { });
-        TestClient.Frame configFinish = client.readFrame();
-        assertEquals(PacketIds.id(version, PacketIds.CONFIG_C_FINISH), configFinish.id);
+        int registryCount = 0;
+        boolean knownPacksSeen = false;
+        boolean featureFlagsSeen = false;
+        boolean tagsSeen = false;
+        while (true) {
+            TestClient.Frame frame = client.readFrame();
+            if (frame.id == PacketIds.id(version, PacketIds.CONFIG_C_KNOWN_PACKS)) {
+                knownPacksSeen = true;
+                client.send(PacketIds.CONFIG_S_KNOWN_PACKS, b -> {
+                    b.writeVarInt(1);
+                    b.writeString("minecraft");
+                    b.writeString("core");
+                    b.writeString(version.display());
+                });
+            } else if (frame.id == PacketIds.id(version, PacketIds.CONFIG_C_FEATURE_FLAGS)) {
+                featureFlagsSeen = true;
+            } else if (frame.id == PacketIds.id(version, PacketIds.CONFIG_C_REGISTRY_DATA)) {
+                registryCount++;
+            } else if (frame.id == PacketIds.id(version, PacketIds.CONFIG_C_UPDATE_TAGS)) {
+                tagsSeen = true;
+            } else if (frame.id == PacketIds.id(version, PacketIds.CONFIG_C_FINISH)) {
+                break;
+            } else if (frame.id == PacketIds.id(version, PacketIds.CONFIG_C_DISCONNECT)) {
+                fail("server disconnected during configuration");
+            }
+        }
+        assertTrue(knownPacksSeen, "Known Packs negotiation missing");
+        assertTrue(featureFlagsSeen, "Feature Flags missing");
+        assertTrue(tagsSeen, "Update Tags missing");
+        assertTrue(registryCount >= 30, "expected the full synchronized registry set, got "
+                + registryCount);
 
+        // Play: full join sequence followed by keep-alives.
         client.send(PacketIds.CONFIG_S_FINISH, b -> { });
-        TestClient.Frame playLogin = client.readFrame();
-        assertEquals(PacketIds.id(version, PacketIds.PLAY_C_LOGIN), playLogin.id);
-
-        long deadline = System.currentTimeMillis() + 1400L;
+        boolean loginSeen = false;
+        boolean positionSeen = false;
+        boolean gameEventSeen = false;
+        boolean chunkSeen = false;
         int keepAlives = 0;
+        long deadline = System.currentTimeMillis() + 1400L;
         while (System.currentTimeMillis() < deadline) {
             TestClient.Frame frame = client.readFrame();
             if (frame.id == PacketIds.id(version, PacketIds.PLAY_C_DISCONNECT)) {
                 fail("server disconnected the client during the keep-alive window");
             }
-            if (frame.id == PacketIds.id(version, PacketIds.PLAY_C_KEEP_ALIVE)) {
+            if (frame.id == PacketIds.id(version, PacketIds.PLAY_C_LOGIN)) loginSeen = true;
+            else if (frame.id == PacketIds.id(version, PacketIds.PLAY_C_PLAYER_POSITION)) positionSeen = true;
+            else if (frame.id == PacketIds.id(version, PacketIds.PLAY_C_GAME_EVENT)) gameEventSeen = true;
+            else if (frame.id == PacketIds.id(version, PacketIds.PLAY_C_CHUNK_DATA)) chunkSeen = true;
+            else if (frame.id == PacketIds.id(version, PacketIds.PLAY_C_KEEP_ALIVE)) {
                 long id = frame.body.readLong();
                 client.send(PacketIds.PLAY_S_KEEP_ALIVE, b -> b.writeLong(id));
                 keepAlives++;
             }
         }
+        assertTrue(loginSeen, "Play Login missing");
+        assertTrue(positionSeen, "Synchronize Player Position missing");
+        assertTrue(gameEventSeen, "Start waiting for chunks Game Event missing");
+        assertTrue(chunkSeen, "empty chunk missing");
         assertTrue(keepAlives >= 2, "expected at least two keep-alives, got " + keepAlives);
         assertFalse(client.isClosed(), "client socket should still be open");
     }
@@ -176,8 +216,8 @@ class ProtocolIntegrationTest {
                 + "  session-url: \"" + sessionUrl + "\"\n"
                 + "  max-frame-size: 2097152\n"
                 + "  max-connections: 256\n"
-                + "  keep-alive-interval-ms: 200\n"
-                + "  keep-alive-timeout-ms: 2000\n"
+                + "  keep-alive-interval-ms: 300\n"
+                + "  keep-alive-timeout-ms: 5000\n"
                 + "  selector-threads: 1\n"
                 + "pools:\n"
                 + "  frames:\n"

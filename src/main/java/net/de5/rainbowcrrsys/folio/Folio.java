@@ -7,6 +7,7 @@ public final class Folio {
     }
 
     public static void main(String[] args) throws Exception {
+        License.ensure();
         ServerConfig cfg = ServerConfig.load();
         GcRuntime gc = GcRuntime.start(cfg);
         OnlineAuth online = new OnlineAuth(cfg);

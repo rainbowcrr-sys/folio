@@ -164,6 +164,22 @@ public final class PacketBuffer {
         return (readByte() << 24) | (readByte() << 16) | (readByte() << 8) | readByte();
     }
 
+    public void writeFloat(float value) {
+        writeInt(Float.floatToIntBits(value));
+    }
+
+    public float readFloat() {
+        return Float.intBitsToFloat(readInt());
+    }
+
+    public void writeDouble(double value) {
+        writeLong(Double.doubleToLongBits(value));
+    }
+
+    public double readDouble() {
+        return Double.longBitsToDouble(readLong());
+    }
+
     public void writeUnsignedShort(int value) {
         writeByte((value >>> 8) & 0xFF);
         writeByte(value & 0xFF);

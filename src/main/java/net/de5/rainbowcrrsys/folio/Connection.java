@@ -12,6 +12,7 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -20,9 +21,9 @@ import java.util.function.Consumer;
  * <p>All work happens on the owning selector thread. Pooled buffers are borrowed, used and
  * returned on that thread only, which is the gc-primitives 0.2.0 Pool contract.
  *
- * <p>Play state sends the agreed "login packet + Keep-Alive" boundary. The play login
- * payload is intentionally minimal: a vanilla client needs the full 26.x layout plus
- * Configuration-phase registry data before it finishes loading. See docs/DESIGN.md.
+ * <p>Configuration now performs the full vanilla negotiation: Known Packs round trip,
+ * Feature Flags, Registry Data, Update Tags, then Finish Configuration. Play sends the
+ * complete join sequence from {@link PlaySequence}.
  */
 final class Connection {
 
@@ -47,6 +48,8 @@ final class Connection {
     private byte[] verifyToken;
     private Cipher encryptCipher;
     private Cipher decryptCipher;
+    private boolean knownPacksSent;
+    private boolean registrySent;
 
     private byte[] partialOut;
     private boolean closeAfterFlush;
@@ -246,7 +249,11 @@ final class Connection {
             }
         } else if (id == PacketIds.id(version, PacketIds.LOGIN_S_ACK)) {
             state = ConnState.CONFIGURATION;
-            send(PacketIds.CONFIG_C_FINISH, b -> { });
+            knownPacksSent = false;
+            registrySent = false;
+            send(PacketIds.CONFIG_C_KNOWN_PACKS,
+                    b -> Registries.writeKnownPacks(b, version));
+            knownPacksSent = true;
         }
     }
 
@@ -263,38 +270,58 @@ final class Connection {
     }
 
     private void onConfiguration(int id, PacketBuffer p) {
-        if (id == PacketIds.id(version, PacketIds.CONFIG_S_CLIENT_INFO)) {
+        if (id == PacketIds.id(version, PacketIds.CONFIG_S_KNOWN_PACKS)) {
+            if (!knownPacksSent || registrySent) return;
+            drainKnownPacks(p);
+            registrySent = true;
+            send(PacketIds.CONFIG_C_FEATURE_FLAGS, Registries::writeFeatureFlags);
+            for (Registries.Registry registry : Registries.load()) {
+                Registries.Registry current = registry;
+                send(PacketIds.CONFIG_C_REGISTRY_DATA,
+                        b -> Registries.writeRegistryData(b, current));
+            }
+            send(PacketIds.CONFIG_C_UPDATE_TAGS, Registries::writeUpdateTags);
+            send(PacketIds.CONFIG_C_FINISH, b -> { });
+        } else if (id == PacketIds.id(version, PacketIds.CONFIG_S_CLIENT_INFO)) {
             // Ignored in this milestone.
         } else if (id == PacketIds.id(version, PacketIds.CONFIG_S_KEEP_ALIVE)) {
             onKeepAliveResponse(p.readLong());
         } else if (id == PacketIds.id(version, PacketIds.CONFIG_S_FINISH)) {
-            state = ConnState.PLAY;
-            sendPlayLogin();
-            keepAliveStarted = false;
+            enterPlay();
         }
+    }
+
+    private void drainKnownPacks(PacketBuffer p) {
+        try {
+            int count = p.readVarInt();
+            for (int i = 0; i < Math.min(count, 64); i++) {
+                p.readString(32767);
+                p.readString(32767);
+                p.readString(32767);
+            }
+        } catch (RuntimeException ignored) {
+            // A minimal or empty response still allows the core to proceed.
+        }
+    }
+
+    private void enterPlay() {
+        state = ConnState.PLAY;
+        keepAliveStarted = false;
+        BiConsumer<String, Consumer<PacketBuffer>> sender = this::send;
+        PlaySequence.emit(version, cfg, name, uuid, sender);
     }
 
     private void onPlay(int id, PacketBuffer p) {
         if (id == PacketIds.id(version, PacketIds.PLAY_S_KEEP_ALIVE)) {
             onKeepAliveResponse(p.readLong());
+        } else if (id == PacketIds.id(version, PacketIds.PLAY_S_ACCEPT_TELEPORTATION)) {
+            // 26.3 echoes the resulting position; no movement simulation here.
+        } else if (id == PacketIds.id(version, PacketIds.PLAY_S_PLAYER_LOADED)) {
+            // The loading screen closed; still no gameplay to start.
+        } else if (id == PacketIds.id(version, PacketIds.PLAY_S_CHUNK_BATCH_RECEIVED)) {
+            // Client-side chunk batch acknowledgement.
         }
-        // Everything else is out of scope for the "login packet + KeepAlive" boundary.
-    }
-
-    /** Minimal play login payload; see docs/DESIGN.md for the full 26.x layout note. */
-    private void sendPlayLogin() {
-        send(PacketIds.PLAY_C_LOGIN, b -> {
-            b.writeInt(1);
-            b.writeBoolean(false);
-            b.writeVarInt(1);
-            b.writeString("minecraft:overworld");
-            b.writeVarInt(cfg.maxConnections);
-            b.writeVarInt(8);
-            b.writeVarInt(8);
-            b.writeBoolean(false);
-            b.writeBoolean(true);
-            b.writeBoolean(false);
-        });
+        // Client Tick End, movement and other serverbound packets are intentionally ignored.
     }
 
     private void onKeepAliveResponse(long value) {
@@ -331,11 +358,14 @@ final class Connection {
     }
 
     private void disconnectNow(String message) {
-        String key = PacketIds.LOGIN_C_DISCONNECT;
-        if (state == ConnState.CONFIGURATION) key = PacketIds.CONFIG_C_DISCONNECT;
-        else if (state == ConnState.PLAY) key = PacketIds.PLAY_C_DISCONNECT;
-        String finalKey = key;
-        send(finalKey, b -> b.writeString(TextComponent.plain(message)));
+        if (state == ConnState.LOGIN) {
+            send(PacketIds.LOGIN_C_DISCONNECT,
+                    b -> b.writeString(TextComponent.plain(message)));
+        } else if (state == ConnState.CONFIGURATION) {
+            send(PacketIds.CONFIG_C_DISCONNECT, b -> Nbt.writeTextComponent(b, message));
+        } else if (state == ConnState.PLAY) {
+            send(PacketIds.PLAY_C_DISCONNECT, b -> Nbt.writeTextComponent(b, message));
+        }
         closeAfterFlush = true;
     }
 
