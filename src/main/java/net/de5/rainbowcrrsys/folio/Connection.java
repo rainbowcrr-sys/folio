@@ -239,13 +239,15 @@ final class Connection {
                     return;
                 }
                 String hash = online.loginHash(secret);
-                uuid = online.verifySession(name, hash);
+                OnlineAuth.SessionProfile profile = online.verifySession(name, hash);
+                uuid = profile.uuid();
+                name = profile.name();
                 Cipher[] ciphers = online.ciphers(secret);
                 encryptCipher = ciphers[0];
                 decryptCipher = ciphers[1];
                 sendLoginFinished();
             } catch (Exception e) {
-                disconnectNow("Authentication failed");
+                disconnectNow("Failed to verify username!");
             }
         } else if (id == PacketIds.id(version, PacketIds.LOGIN_S_ACK)) {
             state = ConnState.CONFIGURATION;

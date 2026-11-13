@@ -157,8 +157,20 @@ zero-dependency reader, not a full JSON library.
 - **Offline**: Login Start goes straight to Login Success with a UUIDv3 derived from
   `OfflinePlayer:<name>`.
 
-The server-side verification chain is complete; end-to-end verification with a real
-paid account and a vanilla client is a local step (see Limitations).
+The server-side verification chain is complete and **verifiable offline, with no account,
+no launcher, no computer and no network access**. See
+[docs/AUTH_SELFCHECK.md](docs/AUTH_SELFCHECK.md). Two correctness fixes are covered there:
+
+- The `serverId` hash is Minecraft's *signed* two's-complement hex digest. A leading `-`
+  is part of the value and must be kept; stripping it makes roughly half of all genuine
+  logins fail with "Failed to verify username".
+- `hasJoined` returning HTTP 204 means the player did **not** complete `/join` and must be
+  refused. Treating 204 as success would let any unauthenticated client into an
+  online-mode server. Only HTTP 200 with a matching profile is a pass.
+
+The tests use the official published digest vectors (`Notch`, `jeb_`, `simon`), RSA
+round-trips, continuous AES/CFB8 across encrypted frame boundaries, and the 200 / 204 /
+403 / name-mismatch session responses. They run in every CI matrix cell.
 
 ## Observability
 
@@ -171,15 +183,20 @@ Set `GC_PRIMITIVES_DIAG=1` to enable `memory_scope` diagnostics.
 GitHub Actions runs `mvn -B verify` on every push, pull request, and manual dispatch, over a
 matrix of three protocol versions and two JDKs (25 and 26). The integration test drives a
 scripted client through all five states, the registry negotiation, the full Play join
-sequence, and a keep-alive hold, for both offline and online (mock session) modes. No
-credentials are stored in the repository or in CI configuration.
+sequence, and a keep-alive hold, for both offline and online (mock session) modes. It also
+runs the offline authentication self-check (official digest vectors, RSA/AES round-trips,
+and the 200/204/403 refusal paths) plus the two-start EULA/file-layout job. No credentials
+are stored in the repository or in CI configuration.
 
 ## Limitations
 
-- **A real vanilla client join is not verified here.** CI uses a scripted protocol client,
-  and this environment has neither a 26.x game client nor a paid account. The full sequence
-  is written from the official protocol page; the last mile — a real client rendering the
-  world, and a real account completing `hasJoined` — needs one local run with JDK 25+.
+- **A real paid-account, real-client join is not claimed.** It requires a machine that can
+  run the official launcher and a 26.x Java client; this project's authoring environment and
+  CI have neither, and the account owner may not have one either. This is an environmental
+  limit, not an unfinished code path: the server half of the chain is verified offline
+  (see above), and the client half is the launcher's job. When such a machine is available,
+  the whole check is two commands — run the jar, join `127.0.0.1:25565` with a 26.1/26.2/26.3
+  client — and nothing needs to be sent to this repository.
 - The built-in registry set is minimal. A vanilla client may require the full exported
   `registries.json` plus complete NBT inline data to finish resolving every registry.
 - The Play IDs for 775/776 are documented inferences, as described above.

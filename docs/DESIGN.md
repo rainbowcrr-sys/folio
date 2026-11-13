@@ -17,8 +17,10 @@ In scope:
 - VarInt framing, packet IDs, five connection states
 - 26.1 / 26.2 / 26.3 through one table plus a resolved difference map
 - Status response (MOTD, version, player counts), Ping/Pong
-- Offline and online authentication, both complete
-- Encryption (RSA + AES/CFB8) and `hasJoined` session verification
+- Offline and online authentication, both complete and correctness-fixed (signed digest,
+  strict 200-only session verification)
+- Encryption (RSA + AES/CFB8) and `hasJoined` session verification, verified offline
+  against the official published digest vectors
 - Full Configuration negotiation: Known Packs round trip, Feature Flags, Registry Data for
   all 31 synchronized registries, Update Tags, Finish Configuration
 - Full Play join sequence: complete `login` packet, position sync, mandatory Game Event 13,
@@ -47,7 +49,9 @@ on-disk layout mirrors a vanilla server so a bare jar is complete and runnable, 
 `world/` tree is not a loaded level — there is no terrain, mobs, inventory, commands, or
 save/load. For a playable server, the official `server.jar` is the complete supported path;
 folio is the readable, modifiable protocol layer. These are two different deliverables, and
-neither is presented as the other.
+neither is presented as the other. Likewise, a real paid-account join requires a machine
+with the official launcher; no such machine is assumed to exist here, and the repository
+never asks for credentials.
 
 ## 2. Version layer
 
@@ -171,14 +175,32 @@ Online, per the official protocol page:
    Verify Token (random), and `should authenticate = true`.
 3. Client replies with `key`: Shared Secret and Verify Token, both RSA-encrypted.
 4. Server decrypts both with its private key and compares the token.
-5. Login hash: SHA-1 over the server id string, the shared secret, and the encoded public
-   key, formatted with Minecraft's signed-hex digest convention.
-6. `GET <session-url>?username=<name>&serverId=<hash>` (optional `ip`). A 204 or a profile
-   JSON response is accepted; anything else disconnects.
-7. AES/CFB8 is enabled, then Login Success is sent encrypted.
+5. Login hash: SHA-1 over the server id string (empty), the shared secret, and the encoded
+   public key, formatted with Minecraft's **signed** two's-complement hex digest convention
+   (`new BigInteger(digest).toString(16)`). A leading `-` is part of the serverId and must
+   be kept; stripping it breaks roughly half of genuine logins.
+6. `GET <session-url>?username=<name>&serverId=<hash>` (optional `ip`). **Only HTTP 200 with
+   a matching profile is a pass.** HTTP 204 means the client never completed `/join` and is
+   refused; 403, an empty body, a missing id, or a mismatched profile name are refused too.
+   Treating 204 as success would bypass online-mode authentication entirely.
+7. AES/CFB8 is enabled as a continuous stream (length prefix and packet id included, no
+   reset between frames), then Login Success is sent encrypted with the UUID and canonical
+   name returned by Mojang.
 
-The session URL is configurable so CI can point at `MockSessionServer` (a loopback
-`com.sun.net.httpserver` handler). No real Mojang service and no secrets are used in CI.
+The session URL is configurable so CI can point at `MockSessionServer` (a loopback socket
+server supporting 200 / 204 / 403 / name-mismatch). No real Mojang service and no secrets
+are used in CI.
+
+### 4.1 Offline verification
+
+`AuthVerificationTest` validates the entire server half without an account, launcher, game
+client, or network access: the three official published digest vectors (`Notch`, `jeb_`,
+`simon`), the negative-digest minus sign, `loginHash` byte-for-byte, RSA round-trips,
+continuous AES/CFB8 across two encrypted frames, canonical profile name from 200, and
+refusal on 204 / 403 / name mismatch. See `docs/AUTH_SELFCHECK.md`. A real paid-account
+end-to-end join is **not** claimed: it needs a machine with the official launcher, which
+this environment (and the account owner) does not have. That is an environmental limit, not
+an unfinished code path.
 
 ## 5. Network layer
 
@@ -330,6 +352,7 @@ LICENSE
 LICENSE.txt
 许可.txt
 docs/DESIGN.md
+docs/AUTH_SELFCHECK.md
 .gitignore
 config.yaml
 pom.xml
@@ -341,9 +364,10 @@ src/test/java/net/de5/rainbowcrrsys/folio/...
 
 Commits: `docs: add design`, `feat: minimal 26.x protocol core`,
 `feat: complete configuration and join sequence`,
-`feat: vanilla-style EULA gate and first-run config`, and
-`feat: complete vanilla-compatible server file layout`. All English Conventional-style
-messages. No credential, token, or key material appears in any committed file, in git
+`feat: vanilla-style EULA gate and first-run config`,
+`feat: complete vanilla-compatible server file layout`, and
+`fix: correct signed serverId digest and strict hasJoined verification`. All English
+Conventional-style messages. No credential, token, or key material appears in any committed file, in git
 history, or in CI configuration.
 
 Both startup phases are verified locally with `java -cp ... Folio` plus a Status ping
