@@ -61,34 +61,61 @@ java -jar target/folio-0.1.0-SNAPSHOT.jar
 A prebuilt shaded jar (`folio.jar`) is also attached to every successful CI run as the
 `folio-jar` artifact, so you can download and run it without Maven.
 
-**The first start is an EULA gate, exactly like the official server.** It writes two files
-and exits without binding a port:
+**Two starts, exactly like the official server.**
+
+Run 1 writes the complete on-disk server layout and then stops at the EULA gate without
+binding a port:
 
 ```
-# run 1
 java -jar folio.jar
-#   -> 许可.txt   (Apache-2.0 text, bundled inside the jar)
-#   -> eula.txt   (default: eula=false)
-#   -> prints "Edit eula.txt to eula=true, then start folio again."
+#   -> 许可.txt                 Apache-2.0 text (bundled inside the jar)
+#   -> eula.txt                 default: eula=false
+#   -> server.properties        vanilla-compatible mirror (folio reads config.yaml)
+#   -> ops.json / whitelist.json / banned-players.json / banned-ips.json / usercache.json
+#   -> world/dimensions/minecraft/{overworld,the_nether,the_end}/{region,entities,poi,data}
+#   -> world/players/{advancements,data,stats}, world/data, world/datapacks,
+#      world/resourcepacks
+#   -> logs/latest.log          all server log records, truncated on each start
 ```
 
-Edit `eula.txt` to `eula=true`, then start again. Only the accepted start generates
-`config.yaml` (if missing), binds the port, and — 30 seconds later — writes
-`logs/metrics.json` (overwritten every 30 s, never accumulating).
+Edit `eula.txt` to `eula=true`, then start again. The accepted start generates
+`config.yaml` (if missing), binds the port, mirrors logs into `logs/latest.log`, and —
+30 seconds later — writes `logs/metrics.json` (overwritten every 30 s, never accumulating).
 
 ```sh
 sed -i 's/^eula=false/eula=true/' eula.txt   # or just edit the file
 java -jar folio.jar
 ```
 
-Nothing else is written: no `world/`, no `server.properties`, no player or ban lists, no
-`latest.log`, and no other acceptance files.
+Existing files are never overwritten, so edits to `server.properties`, the JSON lists,
+`eula.txt`, or `config.yaml` survive restarts. Nothing else is written: there is no second
+log file, no cache database, and no hidden state directory.
 
 `config.yaml` is generated with defaults on the first accepted start: port `25565`, MOTD
 `A 26.x protocol core`, `online-mode: true`. For a local smoke test set
 `online-mode: false` so no Mojang session lookup is attempted.
 `GC_PRIMITIVES_CONFIG` overrides the config path; pool settings and server settings are
 hot-reloaded, and a changed `online-mode` applies to **new connections only**.
+
+## If you want a fully playable server
+
+folio is a **from-scratch protocol core**, not a reimplementation of the game: it completes
+Status, Login, Configuration and Play, and keeps a connection alive, but the world is one
+empty chunk — there is no terrain generation, mobs, inventory, crafting, commands, or world
+save/load. The `world/` tree above is a vanilla-compatible directory layout, not a loaded
+level.
+
+For a server you can actually play on right now, use the official dedicated server. It is
+the complete, supported implementation:
+
+```sh
+java -jar server.jar nogui      # JDK 25+, release 26.3
+# edit eula.txt -> eula=true, then run again
+```
+
+Both paths use the same two-start EULA flow and the same `eula.txt` format. folio is the
+part you can read, modify and learn from; `server.jar` (or Paper/Vanilla) is the part that
+runs a real game.
 
 ## Registries and real clients
 

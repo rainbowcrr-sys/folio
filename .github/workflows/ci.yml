@@ -42,38 +42,55 @@ jobs:
           cache: maven
       - name: Package shaded jar
         run: mvn -B -q package -DskipTests
-      - name: First start stops at the EULA gate
+      - name: First start writes the full server layout and stops at the EULA gate
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p smoke
           cp target/folio-0.1.0-SNAPSHOT.jar smoke/folio.jar
           cd smoke
-          java -jar folio.jar > first.log 2>&1
+          java -jar folio.jar > first.console.log 2>&1
           test -f eula.txt
-          test -f "许可.txt"
           grep -q '^eula=false' eula.txt
-          ! grep -q 'folio listening on port' first.log
+          test -f "许可.txt"
+          test -f server.properties
+          test -f ops.json
+          test -f whitelist.json
+          test -f banned-players.json
+          test -f banned-ips.json
+          test -f usercache.json
+          test -d world/dimensions/minecraft/overworld/region
+          test -d world/dimensions/minecraft/the_nether/region
+          test -d world/dimensions/minecraft/the_end/region
+          test -d world/players/data
+          test -f logs/latest.log
+          grep -q 'server-port=25565' server.properties
+          ! grep -q 'folio listening on port' first.console.log
           ! test -f config.yaml
-          ! test -d logs
-          echo "first start: eula.txt + license only, no port bound"
-      - name: Second start listens
+          ! test -f logs/metrics.json
+          echo "first start: full vanilla-style layout, no port bound"
+      - name: Second start listens and keeps running
         shell: bash
         run: |
           set -euo pipefail
           cd smoke
           sed -i 's/^eula=false/eula=true/' eula.txt
-          java -jar folio.jar > second.log 2>&1 &
+          java -jar folio.jar > second.console.log 2>&1 &
           pid=$!
           for i in $(seq 1 40); do
-            grep -q 'folio listening on port' second.log && break
+            grep -q 'folio listening on port' second.console.log && break
             sleep 0.5
           done
-          grep -q 'folio listening on port' second.log
+          grep -q 'folio listening on port' second.console.log
           test -f config.yaml
+          test -f logs/latest.log
+          grep -q 'folio listening on port' logs/latest.log
+          test -f eula.txt
+          grep -q '^eula=true' eula.txt
+          kill -0 "$pid"
           kill "$pid" || true
           wait "$pid" 2>/dev/null || true
-          echo "second start: config.yaml generated and server listening"
+          echo "second start: config.yaml generated, log mirrored, server listening"
       - name: Upload runnable jar
         uses: actions/upload-artifact@v4
         with:

@@ -27,8 +27,11 @@ In scope:
 - Full gc-primitives 0.2.0 integration
 - Apache-2.0 license text in the repo and inside the shaded jar
 - Vanilla-style two-start EULA gate (`eula.txt`, `eula=false` -> `true`)
+- Complete vanilla-compatible on-disk layout: `server.properties`, 26.x `world/` tree,
+  ops/whitelist/ban/usercache JSON, `logs/latest.log`, all idempotent and never overwritten
 - Auto-generated `config.yaml` on the first accepted start, so a bare jar runs as-is
-- GitHub Actions matrix CI, a two-start startup job, and a downloadable shaded jar artifact
+- GitHub Actions matrix CI, a two-start startup job with full file assertions, and a
+  downloadable shaded jar artifact
 
 Out of scope: terrain generation, entities, inventory, chat commands, redstone, plugin API,
 resource packs, full registry NBT inline data, and 26.4.
@@ -38,6 +41,13 @@ vanilla client join and a real paid-account `hasJoined` round trip are **not** v
 this environment: there is no 26.x game client and no account here. The sequence is written
 from the official protocol page and needs one local run to close that last mile. This is
 stated plainly rather than claimed as done.
+
+**Scope boundary, stated once:** folio is a protocol core, not a game implementation. The
+on-disk layout mirrors a vanilla server so a bare jar is complete and runnable, but the
+`world/` tree is not a loaded level — there is no terrain, mobs, inventory, commands, or
+save/load. For a playable server, the official `server.jar` is the complete supported path;
+folio is the readable, modifiable protocol layer. These are two different deliverables, and
+neither is presented as the other.
 
 ## 2. Version layer
 
@@ -236,17 +246,20 @@ zero-dependency reader in `Registries`. Export it from the official server jar w
 `java -DbundlerMainClass=net.minecraft.data.Main -jar server.jar --reports`. This is the
 supported path to a full vanilla registry view.
 
-### 7.1 Startup files and the EULA gate
+### 7.1 Startup files, on-disk layout, and the EULA gate
 
 `Folio.main` runs in this order:
 
 ```
+LogFiles.install() -> creates logs/, truncates logs/latest.log, attaches a root JUL handler
 License.ensure()   -> writes 许可.txt from /LICENSE.txt inside the jar (if missing)
+ServerFiles.ensure() -> writes server.properties, ops/whitelist/ban/usercache JSON,
+                        and the 26.x world/ dimension tree (all only if missing)
 Eula.ensure()      -> writes eula.txt (eula=false) and returns false on the first start
-                      -> false: log guidance and return, no socket, no config, no logs/
+                      -> false: log guidance and return, no socket, no config, no metrics
 ServerConfig.load()-> writes config.yaml with defaults (if missing), then parses it
 GcRuntime.start()  -> schedules logs/metrics.json at +30 s, every 30 s, overwrite
-NioServer.start()  -> binds the port, logs "folio listening on port ..."
+NioServer.start()  -> binds the port, logs "folio listening on port ..." (also in latest.log)
 ```
 
 Files written by the server itself, by phase:
@@ -255,11 +268,18 @@ Files written by the server itself, by phase:
 | --- | --- | --- |
 | First start | `许可.txt` | Apache-2.0 text, only if absent |
 | First start | `eula.txt` | `eula=false`, only if absent; never overwritten |
+| First start | `server.properties` | vanilla-compatible mirror, only if absent |
+| First start | `ops.json`, `whitelist.json`, `banned-players.json`, `banned-ips.json`, `usercache.json` | empty JSON arrays, only if absent |
+| First start | `world/**` | 26.x dimension / player / data directory tree |
+| First start | `logs/latest.log` | all log records, truncated on each start |
 | Accepted start | `config.yaml` | defaults, only if absent |
 | Accepted start, +30 s | `logs/metrics.json` | overwritten every 30 s |
 
-No `world/`, `dimensions/`, `server.properties`, player/ban/whitelist JSON, or
-`logs/latest.log` is ever written. `registries.json` is optional input, never output.
+`world/` is a vanilla-compatible directory layout, **not a loaded level**: there is no
+`level.dat` and no region data, because folio does not generate or persist a world.
+`server.properties` is a mirror for launchers/tooling; folio's actual settings come from
+`config.yaml`. `registries.json` is optional input, never output. No hidden state directory,
+cache database, or second log file is ever written. Existing files are never overwritten.
 
 `Eula.accepted` skips comments and blank lines, tolerates a UTF-8 BOM, case, and spaces
 around `=`, and refuses on any missing or non-`true` value. The gate applies to the
@@ -286,9 +306,11 @@ executable jar. Dependencies: gc-primitives 0.2.0 (runtime), JUnit Jupiter 5.10.
 - Integration tests cover offline and online (mock session server) for each matrix cell,
   the full five-state walk, the EULA gate unit tests, and a keep-alive hold window
 - A `startup` job packages the shaded jar, runs it in a clean directory twice (first start
-  must leave only `许可.txt` + `eula.txt` and bind no port; second start must generate
-  `config.yaml` and log the listening line), and uploads `folio.jar` as the `folio-jar`
-  artifact so a runnable binary is available without a local Maven build
+  must produce the complete `server.properties` / `world/` / JSON-list / `logs/latest.log` /
+  `许可.txt` / `eula.txt` layout and bind no port; second start must generate
+  `config.yaml`, mirror the listening line into `latest.log`, and stay running), and uploads
+  `folio.jar` as the `folio-jar` artifact so a runnable binary is available without a local
+  Maven build
 - No token is stored in the repository or workflow; the runner's automatic token is used
 
 Note on local verification: the authoring sandbox has Java 11 and no Maven/JDK 25, so the
@@ -297,7 +319,8 @@ GitHub, free tier" path). Locally, all main and test sources are compiled with t
 compiler module against the real gc-primitives 0.2.0 sources, followed by an end-to-end
 smoke run of the full state machine, and a two-start `java -cp ... Folio` check plus Status
 ping (equivalent to `java -jar` on the shaded artifact). That check confirms the EULA gate,
-the `许可.txt` and `config.yaml` writes, and the 30 s `logs/metrics.json` write.
+the complete file layout, the `logs/latest.log` mirror, the `许可.txt` and `config.yaml`
+writes, and the 30 s `logs/metrics.json` write.
 
 ## 10. Repository layout and commit plan
 
@@ -317,8 +340,9 @@ src/test/java/net/de5/rainbowcrrsys/folio/...
 ```
 
 Commits: `docs: add design`, `feat: minimal 26.x protocol core`,
-`feat: complete configuration and join sequence`, and
-`feat: vanilla-style EULA gate and first-run config`. All English Conventional-style
+`feat: complete configuration and join sequence`,
+`feat: vanilla-style EULA gate and first-run config`, and
+`feat: complete vanilla-compatible server file layout`. All English Conventional-style
 messages. No credential, token, or key material appears in any committed file, in git
 history, or in CI configuration.
 

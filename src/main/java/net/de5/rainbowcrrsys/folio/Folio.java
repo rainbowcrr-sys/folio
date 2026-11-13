@@ -1,11 +1,14 @@
 package net.de5.rainbowcrrsys.folio;
 
 /**
- * Entry point: {@code java -jar folio-0.1.0-SNAPSHOT.jar}
+ * Entry point: {@code java -jar folio.jar}
  *
- * <p>Startup order is deliberate: the license file is written first, then the EULA gate.
- * Until the EULA is accepted, no socket is bound, no config is generated, and no metrics
- * are written — the first start only leaves {@code 许可.txt} and {@code eula.txt} behind.
+ * <p>Startup order mirrors a vanilla dedicated server: logs and the on-disk server layout
+ * are prepared first, then the EULA gate. Until the EULA is accepted no socket is bound and
+ * no config or metrics are written.
+ *
+ * <p>After acceptance the server generates {@code config.yaml} if missing, starts the
+ * metrics writer, binds the port, and stays up until the process is stopped.
  */
 public final class Folio {
 
@@ -13,7 +16,10 @@ public final class Folio {
     }
 
     public static void main(String[] args) throws Exception {
+        LogFiles.install();
         License.ensure();
+        ServerFiles.ensure();
+
         if (!Eula.ensure()) {
             System.getLogger("folio").log(System.Logger.Level.INFO,
                     "Edit eula.txt to eula=true, then start folio again.");
