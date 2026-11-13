@@ -119,7 +119,7 @@ class AuthVerificationTest {
             Files.writeString(cfgFile, config(mock.url()));
             OnlineAuth auth = new OnlineAuth(ServerConfig.fromPath(cfgFile));
             OnlineAuth.SessionProfile profile = auth.verifySession("foliotest", "abc123");
-            assertEquals("069a79f4-444e-9472-6a5b-efca90e38aaf5", profile.uuid().toString());
+            assertEquals("069a79f4-44e9-4726-a5be-fca90e38aaf5", profile.uuid().toString());
             assertEquals("FolioTest", profile.name());
             assertTrue(mock.lastQuery().contains("serverId=abc123"), "query: " + mock.lastQuery());
             assertTrue(mock.lastQuery().contains("username=foliotest"));
