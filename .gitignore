@@ -1,0 +1,23 @@
+target/
+logs/
+*.log
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Local secrets and key material: never commit these.
+.gh_token
+*_token
+*.token
+.env
+.env.*
+keys/
+*.pem
+*.der
+*.asc
+
+# Local runtime artifacts
+metrics.json
+hs_err_pid*
+replay_pid*
