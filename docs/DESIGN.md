@@ -365,8 +365,9 @@ src/test/java/net/de5/rainbowcrrsys/folio/...
 Commits: `docs: add design`, `feat: minimal 26.x protocol core`,
 `feat: complete configuration and join sequence`,
 `feat: vanilla-style EULA gate and first-run config`,
-`feat: complete vanilla-compatible server file layout`, and
-`fix: correct signed serverId digest and strict hasJoined verification`. All English
+`feat: complete vanilla-compatible server file layout`,
+`fix: correct signed serverId digest and strict hasJoined verification`, and
+`test: fix expected profile UUID grouping in auth self-check`. All English
 Conventional-style messages. No credential, token, or key material appears in any committed file, in git
 history, or in CI configuration.
 
