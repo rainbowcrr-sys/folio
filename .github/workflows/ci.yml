@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        protocol: ['26.1', '26.2', '26.3']
+        java: ['25', '26']
+    name: ${{ matrix.protocol }} / JDK ${{ matrix.java }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+      - name: Verify protocol core
+        run: mvn -B verify -Dfolio.protocol.version=${{ matrix.protocol }}
+      - name: Upload surefire reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ matrix.protocol }}-jdk${{ matrix.java }}
+          path: target/surefire-reports/

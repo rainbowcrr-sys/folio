@@ -1,0 +1,30 @@
+# folio runtime configuration.
+# Parsed with the gc-primitives 0.2.0 YAML subset (snake_case, two-level keys).
+# GC_PRIMITIVES_CONFIG overrides this file path. Pool keys may also be overridden with
+# GC_PRIMITIVES__<POOL>__<KEY>; server keys with FOLIO_<KEY>.
+
+server:
+  host: 0.0.0.0
+  port: 25565
+  motd: "A 26.x protocol core"
+  online-mode: true
+  session-url: "https://sessionserver.mojang.com/session/minecraft/hasJoined"
+  max-frame-size: 2097152
+  max-connections: 256
+  keep-alive-interval-ms: 15000
+  keep-alive-timeout-ms: 30000
+  selector-threads: 1
+
+pools:
+  frames:
+    max_size: 64
+    on_full: drop_oldest
+    leak_detection: true
+    leak_timeout_ms: 3000
+    prewarm: 8
+  messages:
+    max_size: 64
+    on_full: drop_oldest
+    leak_detection: true
+    leak_timeout_ms: 3000
+    prewarm: 8
